@@ -12,7 +12,7 @@ on:
 
 jobs:
   push:
-    name: Push Docker image to Docker Hub
+    name: Push Docker image to Dockerhub
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo
