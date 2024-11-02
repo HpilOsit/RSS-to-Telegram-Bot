@@ -1,3 +1,19 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2021-2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 from typing import Optional, Union
 from typing_extensions import Final
@@ -13,7 +29,7 @@ from .. import log
 from ..aio_helper import run_async
 from ..compat import bozo_exception_removal_wrapper
 from .req import get
-from .utils import WebFeed, WebError, sentinel
+from .utils import WebResponse, WebFeed, WebError, sentinel
 
 FEED_ACCEPT: Final = 'application/rss+xml, application/rdf+xml, application/atom+xml, ' \
                      'application/xml;q=0.9, text/xml;q=0.8, text/*;q=0.7, application/*;q=0.6'
@@ -31,12 +47,13 @@ async def feed_get(url: str, timeout: Optional[float] = sentinel, web_semaphore:
         _headers['Accept'] = FEED_ACCEPT
 
     try:
-        resp = await get(url, timeout, web_semaphore, decode=False, headers=_headers)
+        resp: WebResponse = await get(url, timeout, web_semaphore, decode=False, headers=_headers)
         rss_content = resp.content
         ret.content = rss_content
         ret.url = resp.url
         ret.headers = resp.headers
         ret.status = resp.status
+        ret.web_response = resp
 
         # some rss feed implement http caching improperly :(
         if resp.status == 200 and int(resp.headers.get('Content-Length', '1')) == 0:

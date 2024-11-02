@@ -1,3 +1,19 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2021-2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 from typing import Union, Optional, AnyStr
 from typing_extensions import Final
@@ -23,6 +39,10 @@ from ..compat import nullcontext, ssl_create_default_context, AiohttpUvloopTrans
 from ..aio_helper import run_async
 from ..errors_collection import RetryInIpv4
 from .utils import YummyCookieJar, WebResponse, proxy_filter, logger, sentinel
+
+# Reuse SSLContext as aiohttp does:
+# https://github.com/aio-libs/aiohttp/blob/f1e4213fb06634584f8d7a1eb90f5397736a18cc/aiohttp/connector.py#L959
+__SSL_CONTEXT: Final = ssl_create_default_context() if env.VERIFY_TLS else False
 
 DEFAULT_READ_BUFFER_SIZE: Final = 2 ** 16
 
@@ -135,16 +155,22 @@ async def _request(
     host = urlparse(url).hostname
     semaphore_to_use = locks.hostname_semaphore(host, parse=False) if semaphore in (None, True) \
         else (semaphore or nullcontext())
-    v6_rr_set = None
-    try:
-        v6_rr_set = (await asyncio.wait_for(resolve(host, 'AAAA', lifetime=1), 1.1)).rrset if env.IPV6_PRIOR else None
-    except DNSException:
-        pass
-    except asyncio.TimeoutError:
-        pass
-    except Exception as e:
-        logger.debug(f'Error occurred when querying {url} AAAA:', exc_info=e)
-    socket_family = AF_INET6 if v6_rr_set else 0
+
+    # Happy Eyeballs, available since aiohttp 3.10, cause AssertionError when setting both proxy and socket family.
+    # Make them mutually exclusive (proxy takes precedence) since it is always meaningless to set them together.
+    # TODO: Is it time to deprecate IPV6_PRIOR and completely rely on Happy Eyeballs (RFC 8305)?
+    use_proxy: bool = PROXY and proxy_filter(host, parse=False)
+    socket_family = 0
+    if env.IPV6_PRIOR and not use_proxy:
+        try:
+            if (
+                    await asyncio.wait_for(resolve(host, 'AAAA', lifetime=1), 1.1)
+            ).rrset:
+                socket_family = AF_INET6
+        except (DNSException, asyncio.TimeoutError):
+            pass
+        except Exception as e:
+            logger.debug(f'Error occurred when querying {url} AAAA:', exc_info=e)
 
     _headers = HEADER_TEMPLATE.copy()
     if headers:
@@ -153,7 +179,6 @@ async def _request(
     async def _fetch():
         async with aiohttp.ClientSession(
                 connector=proxy_connector,
-                timeout=aiohttp.ClientTimeout(total=timeout),
                 headers=_headers,
                 cookie_jar=YummyCookieJar()
         ) as session:
@@ -194,17 +219,16 @@ async def _request(
 
         if retry_in_v4_flag or tries > MAX_TRIES:
             socket_family = AF_INET
-        ssl_context = ssl_create_default_context()
         proxy_connector = (
-            ProxyConnector.from_url(PROXY, family=socket_family, ssl=ssl_context)
-            if (PROXY and proxy_filter(host, parse=False))
-            else aiohttp.TCPConnector(family=socket_family, ssl=ssl_context)
+            ProxyConnector.from_url(PROXY, family=socket_family, ssl=__SSL_CONTEXT)
+            if use_proxy
+            else aiohttp.TCPConnector(family=socket_family, ssl=__SSL_CONTEXT)
         )
 
         try:
             async with semaphore_to_use:
                 async with locks.overall_web_semaphore:
-                    ret = await asyncio.wait_for(_fetch(), timeout and timeout + 0.1)
+                    ret = await asyncio.wait_for(_fetch(), timeout)
                     if socket_family == AF_INET6 and tries < max_tries \
                             and ret.status in STATUSES_SHOULD_RETRY_IN_IPV4:
                         raise RetryInIpv4(ret.status, ret.reason)

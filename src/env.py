@@ -1,13 +1,31 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2020-2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 from typing import Optional, Union
 from typing_extensions import Final
 
 import asyncio
+import yarl
 import os
 import sys
 import colorlog
 import re
 import argparse
+from contextlib import suppress
 from telethon import TelegramClient
 from telethon.tl.types import User, InputPeerUser
 from python_socks import parse_proxy_url
@@ -66,13 +84,24 @@ def __compare_version(version1: str, version2: str) -> tuple[int, list[Union[int
     """loose comparison, only compare the numeric parts"""
     parts1 = __decompose_version(version1)
     parts2 = __decompose_version(version2)
+
+    if not parts1:
+        return -1, parts1, parts2
+    if not parts2:
+        return 1, parts1, parts2
+
     marker = 0
     for part1, part2 in zip(parts1, parts2):
-        if not (isinstance(part1, int) and isinstance(part2, int)):
-            break
         if part1 == part2:
             continue
-        marker = 1 if part1 > part2 else -1
+        part1_is_int = isinstance(part1, int)
+        part2_is_int = isinstance(part2, int)
+        if part1_is_int and part2_is_int:
+            marker = 1 if part1 > part2 else -1
+        elif part1_is_int and part1 > 0:
+            marker = 1
+        elif part2_is_int and part2 > 0:
+            marker = -1
         break
     return marker, parts1, parts2
 
@@ -119,7 +148,7 @@ dot_env_paths = (os.path.join(config_folder_path, '.env'),
                  os.path.join(os.path.abspath('.'), '.env'))
 if is_self_run_as_a_whole_package:
     dot_env_paths = (os.path.normpath(os.path.join(self_path, '..', '.env')),) + dot_env_paths
-for dot_env_path in sorted(set(dot_env_paths), key=dot_env_paths.index):
+for dot_env_path in dict.fromkeys(dot_env_paths):  # remove duplicates while keeping the order
     if os.path.isfile(dot_env_path):
         load_dotenv(dot_env_path, override=True)
         logger.info(f'Found .env file at "{dot_env_path}", loaded')
@@ -140,31 +169,41 @@ def __get_version():
             version = 'dirty'
 
     if version == 'dirty':
-        from subprocess import Popen, PIPE, DEVNULL
+        import subprocess
 
-        # noinspection PyBroadException
-        try:
-            with Popen(['git', 'describe', '--tags', '--dirty', '--broken', '--always'],
-                       shell=False, stdout=PIPE, stderr=DEVNULL, bufsize=-1) as git:
-                git.wait(3)
-                version = git.stdout.read().decode().strip()
-            with Popen(['git', 'branch', '--show-current'],
-                       shell=False, stdout=PIPE, stderr=DEVNULL, bufsize=-1) as git:
-                git.wait(3)
-                if branch := git.stdout.read().decode().strip():
-                    version += f'@{branch}'
-        except Exception:
-            version = 'dirty'
+        with suppress(Exception):
+            # vMAJ.MIN.PAT-N-gHASH[-(broken|dirty)][@BRANCH]
+            version = '@'.join(
+                subprocess.run(
+                    args,
+                    cwd=self_path,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    check=True,
+                    timeout=3,
+                ).stdout.strip()
+                for args in (
+                    ['git', 'describe', '--tags', '--long', '--dirty', '--broken', '--always'],
+                    ['git', 'branch', '--show-current'],
+                )
+            )
 
     try:
         sign, version_decomposed, version_pkg_decomposed = __compare_version(version.lstrip('v'), __version__)
         if sign <= -1:  # outdated version: older than pkg ver
             version = __version__
             if isinstance(version_decomposed[-1], str) and not isinstance(version_pkg_decomposed[-1], str):
-                version += re.sub(r'^-\d+(?=-)', '', version_decomposed[-1])  # trim ahead commit count
+                # -N-gHASH[-(broken|dirty)][@BRANCH]
+                # ^^
+                version += re.sub(r'^-\d+(?=-)', '', version_decomposed[-1])  # trim the marked part
             version = f'v{version}'
-    except ValueError:
+    except (TypeError, ValueError):
         version = f'v{__version__}'
+
+    # empty guard
+    if not version:
+        version = 'dirty'
 
     return version
 
@@ -252,8 +291,9 @@ REQUESTS_PROXIES: Final = {'all': R_PROXY} if R_PROXY else {}
 
 PROXY_BYPASS_PRIVATE: Final = __bool_parser(os.environ.get('PROXY_BYPASS_PRIVATE'))
 PROXY_BYPASS_DOMAINS: Final = __list_parser(os.environ.get('PROXY_BYPASS_DOMAINS'))
-USER_AGENT: Final = os.environ.get('USER_AGENT') or f'RSStT/{__version__} RSS Reader'
+USER_AGENT: Final = os.environ.get('USER_AGENT') or f'RSStT/{__version__} RSS Reader (+https://git.io/RSStT)'
 IPV6_PRIOR: Final = __bool_parser(os.environ.get('IPV6_PRIOR'))
+VERIFY_TLS: Final = __bool_parser(os.environ.get('VERIFY_TLS'), default_value=True)
 
 HTTP_TIMEOUT: Final = int(os.environ.get('HTTP_TIMEOUT') or 12)
 HTTP_CONCURRENCY: Final = int(os.environ.get('HTTP_CONCURRENCY') or 1024)
@@ -277,11 +317,41 @@ IMAGES_WESERV_NL: Final = (
 )
 del _images_weserv_nl
 
+
 # ----- db config -----
-_database_url = os.environ.get('DATABASE_URL') or f'sqlite://{config_folder_path}/db.sqlite3'
-DATABASE_URL: Final = (_database_url.replace('postgresql', 'postgres', 1) if _database_url.startswith('postgresql')
-                       else _database_url)
-del _database_url
+def __get_database_url() -> str:
+    # Railway.app provides DATABASE_PRIVATE_URL, DATABASE_URL and/or DATABASE_PUBLIC_URL.
+    # DATABASE_PRIVATE_URL is for private networking, while DATABASE_PUBLIC_URL is for public networking.
+    # If private networking is disabled, the former still exists but is invalid (i.e., missing host).
+    # If public networking is disabled, both host and port are missing in the latter, resulting in an invalid URL too.
+    # A legacy Postgres addon may provide only DATABASE_URL (for PUBLIC networking) and DATABASE_PRIVATE_URL,
+    # while a modern one may provide only DATABASE_URL (for PRIVATE networking) and DATABASE_PUBLIC_URL.
+    # Thus, we need to select a valid one from them.
+    urls: tuple[str, ...] = tuple(filter(None, map(os.environ.get, (
+        'DATABASE_URL',  # Generic, Railway.app compatible
+        'DATABASE_PRIVATE_URL',  # Railway.app specific
+        'DATABASE_PUBLIC_URL',  # Railway.app specific
+    ))))
+    if not urls:
+        return f'sqlite:{config_folder_path}/db.sqlite3'
+    err: Optional[BaseException] = None
+    for url in urls:
+        try:
+            y_url = yarl.URL(url)
+        except ValueError as _err:
+            err = _err
+        else:
+            return str(
+                # Tortoise-ORM does not recognize 'postgresql' scheme
+                y_url.with_scheme('postgres')
+                if y_url.scheme == 'postgresql'
+                else y_url
+            )
+    else:
+        logger.critical('INVALID DATABASE URL!', exc_info=err)
+
+
+DATABASE_URL: Final = __get_database_url()
 
 # ----- misc config -----
 TABLE_TO_IMAGE: Final = __bool_parser(os.environ.get('TABLE_TO_IMAGE'))

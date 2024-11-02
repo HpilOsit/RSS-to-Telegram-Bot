@@ -2,12 +2,76 @@
 
 ## Unreleased
 
-### Highlights
+### Enhancements
 
-- **Support Python 3.12**: Minor fixes have been made to support Python 3.12. The official Docker image is now based on Python 3.12 as well.
+- **No longer proxies images from `*.wp.com` when generating Telegraph posts**: `*.wp.com` is in the blocklist of `wsrv.nl` (environment variable `IMAGES_WESERV_NL`). Thus, these images are no longer proxied when generating Telegraph posts. All images from `*.wp.com` can be accessed with any referer header, so they are now kept as is.
+
+### Bug fixes
+
+- **Canonical `DATABASE_URL` not recognized**: Since v2.9.0, `DATABASE_URL` is canonicalized before connecting to the corresponding database. However, a canonical URL pointing to a local path cannot be recognized when checking the validity of the scheme (database type). Both canonical (`scheme:/path/to/file.db`) and traditional (`scheme:///path/to/file.db`) forms of such URLs are recognized correctly now.
+
+## v2.9.0: Telegraph-related revert, skip cert verification, and more
+
+### BREAKING CHANGES
+
+Media (image and video) are no longer uploaded when generating Telegraph posts due to [Telegraph disabling media upload](https://t.me/durov/343). (first introduced in v2.6.0)
+
+### Addition
+
+- **Disable TLS certificate verification**: The environment variable `VERIFY_TLS` has been added to disable (when set to `0`) or enable (when set to `1`, default) TLS certificate verification. This is useful when subscribing to feeds with their TLS misconfigured. Note: Disabling TLS certificate verification is not recommended and should only be used as a last resort.
 
 ### Enhancements
 
+- **Sanitize post title and author**: The title and author of a post (RSS item or Atom entry) are now sanitized to prevent unexpected formatting issues. In particular, unexpected whitespaces and linebreaks are removed, and any HTML elements are stripped. This helps display them correctly in Telegram messages as well as Telegraph posts.
+- **Improve robustness on Railway.app**: Some Railway-specific environment variables are recognized to improve robustness on Railway.app. In particular, `DATABASE_PRIVATE_URL` and `DATABASE_PUBLIC_URL` will be used when `DATABASE_URL` is unavailable or invalid. This should solve most database connection issues on Railway.app.
+- **Minor refactor**: Some internal functions have been refactored to improve readability and maintainability.
+
+### Bug fixes
+
+- **`/version` not working**: When installed from PyPI (e.g. `pip install rsstt`), the `/version` command might cause an error. This was a regression introduced in v2.7.0.
+- **Bot managers can set monitoring intervals shorter than limit**: Due to the breaking change introduced in v2.8.0, the privilege of bot managers to set intervals shorter than the minimal monitoring interval became useless. While v2.8.0 only applied this limitation when monitoring the updates of feeds, this release also applies it to the attempts by bot managers to change the monitoring interval for a subscription. Note: bot managers can always lower the minimal monitoring interval by adjusting `minimal_interval` in `/set_option` (see also [Advanced Settings](advanced-settings.md)), but doing so will also permit anyone who is able to use the bot to set shorter intervals.
+- **Minor bug fixes**
+
+## v2.8.0: Retain post order, rewritten monitor, and more
+
+### BREAKING CHANGES
+
+- **Minimal monitoring interval is enforced**: The minimal monitoring interval (`minimal_interval` in `/set_option`) is now applied to all subscriptions regardless of their interval set in the database. Previously, setting a minimal monitoring interval would only affect future attempts to change the monitoring interval for a subscription and would not be applied to bot managers. As a result, pre-existing subscriptions and subscriptions of bot managers escaped. The new behavior is more consistent and predictable. If you are a bot manager of a self-hosted instance and rely on the old behavior that bot managers were able to set shorter intervals than the minimal monitoring interval, you probably need to adjust `minimal_interval` in `/set_option` (see also [Advanced Settings](advanced-settings.md)).
+
+### Highlights
+
+- **Retain post order**: Retain the order of posts in a feed when sending them. Previously, all new posts were sent simultaneously, losing their order within the feed. Note: Posts from different feeds are still sent simultaneously, so it is expected to see them interlaced.
+- **Rewritten monitor**: The feed monitor has been rewritten for flexibility and robustness. It is now more memory-efficient and can smooth out spikes in CPU usage.
+
+### Enhancements
+
+- **Print Telegram user info of bot**: Print the bot's Telegram user info when the bot is started. This is to help bot managers to find the bot's username and user ID when deploying the bot.
+- **Minor refactor**: Some internal functions have been refactored to improve performance and maintainability.
+
+### Bug fixes
+
+- **Exit with 0 when disconnected**: If the bot was logged out due to a network error or Telegram DC degradation, it would exit with exit-code 0. This led to confusion when the bot was running in a container or as a service. Now the bot will exit with exit-code 100 when disconnected.
+- **Unable to handle completely empty posts**: Fix `AttributeError` caused by completely empty posts. They are ignored now.
+- **Minor bug fixes**
+
+## v2.7.0: #Hashtags from post, Python 3.12 support, and more
+
+### BREAKING CHANGES
+
+- **Migrate to `aerich` 0.7.2**: A breaking change introduced in `aerich` (a dependency of RSStT) 0.7.x has prevented RSStT from upgrading it for a long time. A lot of effort has been made, so the migration is expected to be seamless and shouldn't break anything. However, it is encouraged to make a database backup before upgrading RSStT. If you encounter any issues due to the migration, please file a bug report.
+
+### Highlights
+
+- **#Hashtags from post (feed entry)**: If enabled in `/set` or `/set_default`, hashtags from posts (feed entries), merged with the custom hashtags of the feed, will be added to the message. The term "hashtags from post" refers to `<category>` elements in RSS `<item>` or Atom `<entry>`. This feature is disabled by default. Thanks [@maooyer](https://github.com/maooyer) for their first contribution in [#449](https://github.com/Rongronggg9/RSS-to-Telegram-Bot/pull/449).
+- **Support Python 3.12**: Minor fixes have been made to support Python 3.12. The official Docker image is now based on Python 3.12 as well.
+- **Helper scripts to make contributions easier**: When performing contributions that update database models, creating database migration files is not an easy job. [scripts/aerich_helper.py](../scripts/aerich_helper.py) is a helper script that can simplify the process. Passing `--help` to the script to see a detailed usage guide.
+
+### Enhancements
+
+- **Defer monitoring as per RSSHub TTL**: Defer monitoring as per the TTL (Time To Live) of feeds generated by RSSHub. RSSHub caches feed until the TTL expires, so aggressively monitoring RSSHub feeds with a long TTL is unnecessary. This aims to reduce the load of RSStT instances, as well as RSSHub instances. No delay will be applied if TTL is unavailable or less than 5 minutes. Feeds not generated by RSSHub are unaffected, considering the widespread misuse of RSS TTL.
+- **Defer monitoring as per Cloudflare cache**: Ditto, but for feeds proxied by Cloudflare. If Cloudflare proxies a feed without caching it, no delay will be applied to the feed.
+- **Better handling custom #hashtags**: Invalid characters and punctuations that break hashtags are now replaced with `_` (underscore) when setting custom hashtags.
+- **Refine monitoring logging**: The monitoring log has been refined to be more informative and easier to read.
 - **Minor refactor**: Some internal functions have been refactored to improve readability and maintainability.
 
 ## v2.6.0: Upload media to Telegraph, management enhancements
@@ -45,7 +109,7 @@
 ### Bug fixes
 
 - **Stay in topic group even when the "General" topic is closed**: Now that topic groups are not fully supported, the bot can only send messages in the "General" topic. Previously, the bot would only send an error message to the bot manager if the "General" topic is closed. Now the bot will leave the topic group, without disturbing the bot manager, if the "General" topic is closed. This is a temporary limitation before topic groups are fully supported.
-- **v2.4.1 not released to PyPI**: Due to a previous mistake, v2.4.1 could not be released to PyPI. v2.5.0 fixes the mistake and is released to PyPI. 
+- **v2.4.1 not released to PyPI**: Due to a previous mistake, v2.4.1 could not be released to PyPI. v2.5.0 fixes the mistake and is released to PyPI.
 
 ## v2.4.1: Minor enhancements, bug fixes, and Happy New Year!
 
@@ -273,7 +337,7 @@ Official public bot [@RSStT_Bot](https://t.me/RSStT_Bot) is always using the `de
 
 Official public bot: [@RSStT_Bot](https://t.me/RSStT_Bot)
 
-**This is a major release. It introduces some major breaking changes. You must migrate to the new version manually.**  
+**This is a major release. It introduces some major breaking changes. You must migrate to the new version manually.**\
 **PLEASE READ THE [MIGRATION GUIDE](migration-guide-v2.md) BEFORE UPDATING!**
 
 ### BREAKING CHANGES

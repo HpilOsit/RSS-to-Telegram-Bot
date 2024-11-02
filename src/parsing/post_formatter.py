@@ -1,3 +1,19 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2021-2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 from typing import Union, Optional
 from typing_extensions import Final
@@ -66,6 +82,7 @@ class PostFormatter:
                  feed_title: Optional[str] = None,
                  link: Optional[str] = None,
                  author: Optional[str] = None,
+                 tags: Optional[list[str]] = None,
                  feed_link: str = None,
                  enclosures: list[utils.Enclosure] = None):
         """
@@ -74,6 +91,7 @@ class PostFormatter:
         :param feed_title: feed title
         :param link: post link
         :param author: post author
+        :param tags: post tags
         :param feed_link: the url of the feed where the post from
         """
         self.html = html
@@ -81,6 +99,7 @@ class PostFormatter:
         self.feed_title = feed_title
         self.link = link
         self.author = author
+        self.tags = tags
         self.feed_link = feed_link
         self.enclosures = enclosures
 
@@ -91,6 +110,7 @@ class PostFormatter:
         self.parsed_html: Optional[str] = None
         self.plain_length: Optional[int] = None
         self.telegraph_link: Optional[Union[str, False]] = None  # if generating failed, will be False
+        self.tags_escaped: Optional[list[str]] = None
 
         self.__title_similarity: Optional[int] = None
 
@@ -117,6 +137,7 @@ class PostFormatter:
                                  display_author: int = 0,
                                  display_via: int = 0,
                                  display_title: int = 0,
+                                 display_entry_tags: int = -1,
                                  style: int = 0,
                                  display_media: int = 0) -> Optional[tuple[str, bool, bool]]:
         """
@@ -132,6 +153,7 @@ class PostFormatter:
         :param display_via: -3=disable but display link as post title, -2=completely disable,
             -1=disable but display link at the end, 0=feed title and link, 1=feed title and link as post title
         :param display_title: -1=disable, 0=auto, 1=force display
+        :param display_entry_tags: -1=disable, 1=force display
         :param style: 0=RSStT, 1=flowerss
         :param display_media: -1=disable, 0=enable
         :return: (formatted post, need media, need linkpreview)
@@ -143,6 +165,7 @@ class PostFormatter:
         assert display_via in {NO_FEED_TITLE_BUT_LINK_AS_POST_TITLE, COMPLETELY_DISABLE, NO_FEED_TITLE_BUT_TEXT_LINK,
                                NO_FEED_TITLE_BUT_BARE_LINK, FEED_TITLE_AND_LINK, FEED_TITLE_AND_LINK_AS_POST_TITLE}
         assert display_title in {DISABLE, AUTO, FORCE_DISPLAY}
+        assert display_entry_tags in {DISABLE, FORCE_DISPLAY}
         assert display_media in {DISABLE, AUTO, ONLY_MEDIA_NO_CONTENT}
         assert style in {RSSTT, FLOWERSS}
 
@@ -150,7 +173,7 @@ class PostFormatter:
         tags = tags or []
 
         param_hash = f'{sub_title}|{tags}|{send_mode}|{length_limit}|{link_preview}|' \
-                     f'{display_author}|{display_via}|{display_title}|{display_media}|{style}'
+                     f'{display_author}|{display_via}|{display_title}|{display_entry_tags}|{display_media}|{style}'
 
         if param_hash in self.__param_to_option_cache:
             option_hash = self.__param_to_option_cache[param_hash]
@@ -214,6 +237,13 @@ class PostFormatter:
                         )
                 )
         )
+
+        # ---- determine tags ----
+        if display_entry_tags == FORCE_DISPLAY:
+            if self.tags_escaped is None:
+                self.tags_escaped = list(utils.escape_hashtags(self.tags))
+            if self.tags_escaped:
+                tags = utils.merge_tags(tags, self.tags_escaped) if tags else self.tags_escaped
 
         # ---- determine message_style ----
         if style == FLOWERSS:
@@ -342,7 +372,7 @@ class PostFormatter:
 
     def get_post_header_and_footer(self,
                                    sub_title: Optional[str],
-                                   tags: list,
+                                   tags: list[str],
                                    title_type: TypePostTitleType,
                                    via_type: TypeViaType,
                                    need_author: bool,
@@ -395,7 +425,7 @@ class PostFormatter:
         title = self.title or 'Untitled'
 
         # ---- hashtags ----
-        tags_html = Text(' '.join('#' + tag for tag in tags)).get_html() if tags else None
+        tags_html = Text('#' + ' #'.join(tags)).get_html() if tags else None
 
         # ---- author ----
         author_html = Text(f'(author: {self.author})').get_html() if need_author and self.author else None
@@ -486,7 +516,7 @@ class PostFormatter:
 
     def generate_formatted_post(self,
                                 sub_title: Optional[str],
-                                tags: list,
+                                tags: list[str],
                                 title_type: TypePostTitleType,
                                 via_type: TypeViaType,
                                 need_author: bool,

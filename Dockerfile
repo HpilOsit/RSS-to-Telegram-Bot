@@ -1,3 +1,19 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 FROM python:3.12-bookworm AS dep-builder-common
 
 ENV PATH="/opt/venv/bin:$PATH"
@@ -5,7 +21,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN \
     set -ex && \
     python -m venv --copies /opt/venv && \
-    pip install --no-cache-dir --upgrade \
+    python -m pip install --no-cache-dir --upgrade \
         pip setuptools wheel
 
 COPY requirements.txt .
@@ -72,7 +88,7 @@ RUN \
 
 #-----------------------------------------------------------------------------------------------------------------------
 
-FROM python:3.12-bookworm as app-builder
+FROM python:3.12-bookworm AS app-builder
 
 WORKDIR /app
 
@@ -102,7 +118,7 @@ RUN \
 
 #-----------------------------------------------------------------------------------------------------------------------
 
-FROM python:3.12-slim-bookworm as app
+FROM python:3.12-slim-bookworm AS app
 
 WORKDIR /app
 

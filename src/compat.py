@@ -1,3 +1,19 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2022-2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 
 import sys
@@ -7,6 +23,7 @@ if _version_info < (3, 9):
     raise RuntimeError("This bot requires Python 3.9 or later")
 
 from typing import Callable
+from typing_extensions import Final
 
 import copy
 import functools
@@ -25,6 +42,9 @@ except ImportError:
 
 import ssl
 from contextlib import AbstractContextManager, AbstractAsyncContextManager, suppress
+
+# all supported architectures are 64-bit, so the below constants will be a native int (efficient)
+INT64_T_MAX: Final = 2 ** 63 - 1
 
 # backport `contextlib.nullcontext` for Python 3.9
 if _version_info[1] >= 10:
@@ -60,9 +80,6 @@ class AiohttpUvloopTransportHotfix(AbstractAsyncContextManager):
             self.transport.abort()
 
 
-# Reuse SSLContext as aiohttp does:
-# https://github.com/aio-libs/aiohttp/blob/b51610b93b2ae15c4062e3a1680a536ba5f4c5c4/aiohttp/connector.py#L906
-@functools.lru_cache(None)
 def ssl_create_default_context():
     """
     Python 3.10+ disabled some legacy cipher, while some websites still use them.

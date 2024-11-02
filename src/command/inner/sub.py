@@ -1,3 +1,19 @@
+#  RSS to Telegram Bot
+#  Copyright (C) 2021-2024  Rongrong <i@rong.moe>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Affero General Public License as
+#  published by the Free Software Foundation, either version 3 of the
+#  License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU Affero General Public License for more details.
+#
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 from __future__ import annotations
 from typing import Union, Optional, AnyStr
 from collections.abc import Sequence
@@ -14,9 +30,9 @@ from os import path
 from ... import db, web, env
 from ...aio_helper import run_async
 from ...i18n import i18n
-from .utils import update_interval, list_sub, get_http_last_modified, filter_urls, logger, escape_html, \
+from .utils import update_interval, list_sub, filter_urls, logger, escape_html, \
     check_sub_limit, calculate_update
-from ...parsing.utils import html_space_stripper
+from ...parsing.utils import ensure_plain
 
 FeedSnifferCache = TTLCache(maxsize=256, ttl=60 * 60 * 24)
 
@@ -73,18 +89,21 @@ async def sub(user_id: int,
                 if feed:
                     await migrate_to_new_url(feed, feed_url)
 
+            wr = wf.web_response
+            assert wr is not None
+
             # need to use get_or_create because we've changed feed_url to the redirected one
             title = rss_d.feed.title
-            title = html_space_stripper(title) if title else ''
+            title = await ensure_plain(title) if title else ''
             feed, created_new_feed = await db.Feed.get_or_create(defaults={'title': title}, link=feed_url)
             if created_new_feed or feed.state == 0:
                 feed.state = 1
                 feed.error_count = 0
                 feed.next_check_time = None
-                etag = wf.headers and wf.headers.get('ETag')
+                etag = wr.etag
                 if etag:
                     feed.etag = etag
-                feed.last_modified = get_http_last_modified(wf.headers)
+                feed.last_modified = wr.last_modified
                 feed.entry_hashes = list(calculate_update(old_hashes=None, entries=rss_d.entries)[0])
                 await feed.save()  # now we get the id
                 db.effective_utils.EffectiveTasks.update(feed.id)
@@ -92,18 +111,23 @@ async def sub(user_id: int,
         sub_title = sub_title if feed.title != sub_title else None
 
         if not _sub:  # create a new sub if needed
-            _sub, created_new_sub = await db.Sub.get_or_create(user_id=user_id, feed=feed,
-                                                               defaults={'title': sub_title if sub_title else None,
-                                                                         'interval': None,
-                                                                         'notify': -100,
-                                                                         'send_mode': -100,
-                                                                         'length_limit': -100,
-                                                                         'link_preview': -100,
-                                                                         'display_author': -100,
-                                                                         'display_via': -100,
-                                                                         'display_title': -100,
-                                                                         'style': -100,
-                                                                         'display_media': -100})
+            _sub, created_new_sub = await db.Sub.get_or_create(
+                user_id=user_id, feed=feed,
+                defaults={
+                    'title': sub_title if sub_title else None,
+                    'interval': None,
+                    'notify': -100,
+                    'send_mode': -100,
+                    'length_limit': -100,
+                    'link_preview': -100,
+                    'display_author': -100,
+                    'display_via': -100,
+                    'display_title': -100,
+                    'display_entry_tags': -100,
+                    'style': -100,
+                    'display_media': -100
+                }
+            )
 
         if not created_new_sub:
             if _sub.title == sub_title and _sub.state == 1:
@@ -232,8 +256,8 @@ async def unsubs(user_id: int,
         return None
 
     coroutines = (
-            (tuple(unsub(user_id, feed_url=url, lang=lang) for url in feed_urls) if feed_urls else tuple())
-            + (tuple(unsub(user_id, sub_id=sub_id, lang=lang) for sub_id in sub_ids) if sub_ids else tuple())
+            (tuple(unsub(user_id, feed_url=url, lang=lang) for url in feed_urls) if feed_urls else ())
+            + (tuple(unsub(user_id, sub_id=sub_id, lang=lang) for sub_id in sub_ids) if sub_ids else ())
     )
 
     result = await asyncio.gather(*coroutines)
